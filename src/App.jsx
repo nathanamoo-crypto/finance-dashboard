@@ -1,116 +1,245 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+/* ---------------- HELPERS ---------------- */
+const uid = () => crypto.randomUUID();
+
+// Normalize to monthly income
+const normalizeToMonthly = (amount, frequency) => {
+  if (frequency === "Weekly") return amount * 4;
+  if (frequency === "Yearly") return amount / 12;
+  return amount;
+};
+
+// Days in month, handles leap years
+const getDaysInMonth = (year, month) => new Date(year, month, 0).getDate();
+
+const DEFAULT_CATEGORIES = {
+  food: { name: "Food & Drinks", percent: 30 },
+  bills: { name: "Bills & Subscriptions", percent: 20 },
+  lifestyle: { name: "Clothing & Lifestyle", percent: 10 },
+  savings: { name: "Savings & Investments", percent: 25 },
+  misc: { name: "Misc / Emergency", percent: 10 },
+  others: { name: "Others", percent: 5 },
+};
+
+/* ---------------- APP ---------------- */
 export default function App() {
-  const [transactions, setTransactions] = useState([]);
+  /* ---------- STATE ---------- */
+  const today = new Date();
+  const initialMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+  const [month, setMonth] = useState(initialMonth);
 
-  const totalIncome = transactions
-    .filter((t) => t.type === "income")
-    .reduce((sum, t) => sum + t.amount, 0);
+  // Load full store from localStorage
+  const [store, setStore] = useState(() => JSON.parse(localStorage.getItem("finance_store") || "{}"));
 
-  const totalExpenses = transactions
-    .filter((t) => t.type === "expense")
-    .reduce((sum, t) => sum + t.amount, 0);
+  // Get or initialize current month data
+  const data = useMemo(() => {
+    if (store[month]) return store[month];
 
-  const balance = totalIncome - totalExpenses;
+    // Pre-fill from last month if available
+    const months = Object.keys(store).sort();
+    const lastMonthData = months.length ? store[months[months.length - 1]] : null;
 
-  function addTransaction(e) {
-    e.preventDefault();
-
-    const form = e.target;
-    const newTransaction = {
-      id: Date.now(),
-      title: form.title.value,
-      amount: Number(form.amount.value),
-      type: form.type.value,
+    return {
+      income: lastMonthData?.income || { amount: 0, type: "Allowance", frequency: "Monthly" },
+      categories: lastMonthData?.categories || DEFAULT_CATEGORIES,
+      goal: lastMonthData?.goal || { target: "", months: "" },
+      spending: lastMonthData?.spending || {},
     };
+  }, [month, store]);
 
-    setTransactions((prev) => [newTransaction, ...prev]);
-    form.reset();
-  }
+  // Persist changes per month
+  const updateMonthData = (patch) => {
+    const updated = { ...data, ...patch };
+    setStore((prev) => ({ ...prev, [month]: updated }));
+  };
 
+  useEffect(() => {
+    localStorage.setItem("finance_store", JSON.stringify(store));
+  }, [store]);
+
+  /* ---------- CALCULATIONS ---------- */
+  const [year, monthNumber] = month.split("-").map(Number);
+  const daysInMonth = useMemo(() => getDaysInMonth(year, monthNumber), [year, monthNumber]);
+
+  const monthlyIncome = useMemo(() => normalizeToMonthly(+data.income.amount || 0, data.income.frequency), [data.income]);
+
+  const totalPercent = useMemo(() =>
+    Object.values(data.categories).reduce((s, c) => s + Number(c.percent), 0),
+    [data.categories]
+  );
+
+  const budgets = useMemo(() => {
+    const result = {};
+    Object.entries(data.categories).forEach(([key, c]) => {
+      result[key] = {
+        ...c,
+        monthly: (monthlyIncome * c.percent) / 100,
+        daily: ((monthlyIncome * c.percent) / 100) / daysInMonth,
+      };
+    });
+    return result;
+  }, [data.categories, monthlyIncome, daysInMonth]);
+
+  const goalMonthly = data.goal.target && data.goal.months ? data.goal.target / data.goal.months : null;
+  const savingsBudget = budgets.savings?.monthly || 0;
+
+  /* ---------- UI ---------- */
   return (
-    <div className="min-h-screen bg-gray-100 text-gray-900">
-      {/* Navbar */}
-      <header className="bg-white shadow">
-        <div className="max-w-4xl mx-auto px-4 py-4">
-          <h1 className="text-2xl font-bold">Finance Dashboard</h1>
-        </div>
+    <div className="min-h-screen bg-gray-100 p-4 space-y-6">
+      <header className="bg-white p-4 rounded-xl shadow">
+        <h1 className="text-2xl font-bold">Smart Student Budget Planner</h1>
+        <p className="text-sm text-gray-500">Plan ahead. Carry your budget month to month. Stay confident.</p>
+        <input
+          type="month"
+          value={month}
+          onChange={(e) => setMonth(e.target.value)}
+          className="border rounded px-2 py-1 mt-2"
+        />
       </header>
 
-      {/* Main */}
-      <main className="max-w-4xl mx-auto px-4 py-6 space-y-6">
-        {/* Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <SummaryCard title="Income" value={totalIncome} color="text-green-600" />
-          <SummaryCard title="Expenses" value={totalExpenses} color="text-red-600" />
-          <SummaryCard title="Balance" value={balance} color="text-blue-600" />
+      {/* INCOME INPUT */}
+      <Section title="Your Income">
+        <div className="grid sm:grid-cols-4 gap-2">
+          <input
+            type="number"
+            placeholder="Amount"
+            className="input"
+            value={data.income.amount}
+            onChange={(e) => updateMonthData({ income: { ...data.income, amount: e.target.value } })}
+          />
+          <select
+            className="input"
+            value={data.income.type}
+            onChange={(e) => updateMonthData({ income: { ...data.income, type: e.target.value } })}
+          >
+            <option>Allowance</option>
+            <option>Salary</option>
+            <option>Job</option>
+            <option>Other</option>
+          </select>
+          <select
+            className="input"
+            value={data.income.frequency}
+            onChange={(e) => updateMonthData({ income: { ...data.income, frequency: e.target.value } })}
+          >
+            <option>Monthly</option>
+            <option>Weekly</option>
+            <option>Yearly</option>
+          </select>
+          <div className="font-medium flex items-center">
+            Monthly: ₵{monthlyIncome.toFixed(2)}
+          </div>
         </div>
+      </Section>
 
-        {/* Add Transaction */}
-        <section className="bg-white p-4 rounded-lg shadow">
-          <h2 className="font-semibold mb-3">Add Transaction</h2>
-          <form onSubmit={addTransaction} className="grid gap-3 sm:grid-cols-4">
+      {/* PERCENTAGE ALLOCATION */}
+      <Section title="Budget Allocation (%)">
+        {Object.entries(data.categories).map(([key, c]) => (
+          <div key={key} className="grid grid-cols-3 gap-2 items-center">
+            <span>{c.name}</span>
             <input
-              name="title"
-              placeholder="Title"
-              required
-              className="border p-2 rounded"
+              type="range"
+              min="0"
+              max="100"
+              value={c.percent}
+              onChange={(e) =>
+                updateMonthData({ categories: { ...data.categories, [key]: { ...c, percent: e.target.value } } })
+              }
             />
             <input
-              name="amount"
               type="number"
-              placeholder="Amount"
-              required
-              className="border p-2 rounded"
+              className="input"
+              value={c.percent}
+              onChange={(e) =>
+                updateMonthData({ categories: { ...data.categories, [key]: { ...c, percent: e.target.value } } })
+              }
             />
-            <select name="type" className="border p-2 rounded">
-              <option value="income">Income</option>
-              <option value="expense">Expense</option>
-            </select>
-            <button className="bg-blue-600 text-white rounded px-4 py-2 hover:bg-blue-700">
-              Add
-            </button>
-          </form>
-        </section>
+          </div>
+        ))}
+        <p className={`font-medium ${totalPercent === 100 ? "text-green-600" : "text-red-600"}`}>
+          Total Allocation: {totalPercent}%
+        </p>
+        {totalPercent !== 100 && <p className="text-sm text-gray-500">Adjust percentages to make 100%.</p>}
+      </Section>
 
-        {/* Transactions */}
-        <section className="bg-white p-4 rounded-lg shadow">
-          <h2 className="font-semibold mb-3">Transactions</h2>
+      {/* BUDGET BREAKDOWN */}
+      <Section title="Your Monthly & Daily Budget">
+        {Object.entries(budgets).map(([key, b]) => (
+          <div key={key} className="flex justify-between border-b py-1">
+            <span>{b.name}</span>
+            <span>₵{b.monthly.toFixed(2)} / month (₵{b.daily.toFixed(2)} daily)</span>
+          </div>
+        ))}
+      </Section>
 
-          {transactions.length === 0 && (
-            <p className="text-gray-500">No transactions yet.</p>
-          )}
+      {/* SAVINGS GOAL */}
+      <Section title="Savings & Investment Plan">
+        <div className="grid sm:grid-cols-3 gap-2">
+          <input
+            type="number"
+            placeholder="Target amount"
+            className="input"
+            value={data.goal.target}
+            onChange={(e) => updateMonthData({ goal: { ...data.goal, target: e.target.value } })}
+          />
+          <input
+            type="number"
+            placeholder="Deadline (months)"
+            className="input"
+            value={data.goal.months}
+            onChange={(e) => updateMonthData({ goal: { ...data.goal, months: e.target.value } })}
+          />
+        </div>
+        {goalMonthly ? (
+          <>
+            <p className="mt-2">
+              You need to save <strong>₵{goalMonthly.toFixed(2)}</strong> per month.
+            </p>
+            {goalMonthly > savingsBudget && (
+              <p className="text-sm text-orange-600">
+                That’s tight. Consider trimming Food or Lifestyle slightly.
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="text-sm text-gray-500">No goal yet — keep building strong habits 💪</p>
+        )}
+      </Section>
 
-          <ul className="space-y-2">
-            {transactions.map((t) => (
-              <li
-                key={t.id}
-                className="flex justify-between items-center border-b pb-1"
-              >
-                <span>{t.title}</span>
-                <span
-                  className={
-                    t.type === "income"
-                      ? "text-green-600 font-medium"
-                      : "text-red-600 font-medium"
-                  }
-                >
-                  {t.type === "income" ? "+" : "-"}${t.amount}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      </main>
+      {/* MONTHLY CHECK-IN */}
+      <Section title="Monthly Check-in">
+        {Object.entries(budgets).map(([key, b]) => (
+          <div key={key} className="grid grid-cols-3 gap-2">
+            <span>{b.name}</span>
+            <input
+              type="number"
+              placeholder="Spent"
+              className="input"
+              value={data.spending[key] || ""}
+              onChange={(e) =>
+                updateMonthData({ spending: { ...data.spending, [key]: e.target.value } })
+              }
+            />
+            <span className={data.spending[key] > b.monthly ? "text-red-600" : "text-green-600"}>
+              ₵{(b.monthly - (data.spending[key] || 0)).toFixed(2)}
+            </span>
+          </div>
+        ))}
+        <p className="text-sm text-gray-500 mt-2">
+          Red = overspent, Green = within budget. Progress over perfection!
+        </p>
+      </Section>
     </div>
   );
 }
 
-function SummaryCard({ title, value, color }) {
+/* ---------------- UI HELPER ---------------- */
+function Section({ title, children }) {
   return (
-    <div className="bg-white rounded-lg shadow p-4">
-      <p className="text-sm text-gray-500">{title}</p>
-      <p className={`text-2xl font-bold ${color}`}>${value}</p>
-    </div>
+    <section className="bg-white p-4 rounded-xl shadow space-y-3">
+      <h2 className="font-semibold">{title}</h2>
+      {children}
+    </section>
   );
 }
